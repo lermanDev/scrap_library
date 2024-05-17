@@ -2,6 +2,7 @@ import requests
 from requests.models import Response
 from typing import Optional, Union, Dict, List, Tuple
 from lxml.html import fromstring
+import json
 
 
 class WebConnector:
@@ -58,14 +59,16 @@ class WebConnector:
         self,
         xpaths: Union[str, Dict[str, str], List[str], Tuple[str, ...]],
         response: Optional[Response] = None,
-    ) -> Union[str, Dict[str, str]]:
+        delimiter: str = ', ',
+    ) -> Union[str, Dict[str, Union[str, List[str]]], List[Dict[str, str]]]:
         """
-        Extracts data from a response object using a provided XPath, a dictionary of XPaths,
-        or a list/tuple of XPaths. If no response is provided, the last response is used.
-
-        :param xpaths: A string representing a single XPath, a dictionary with XPaths, or a list/tuple of XPaths.
-        :param response: (Optional) The response object from which to extract data.
-        :return: A single data value, a dictionary of results, or an ordered dictionary depending on xpaths input.
+        Modified to extract all matches for given XPaths. Returns a dictionary for single values or lists of values,
+        and a list of dictionaries for key-value data extraction.
+        
+        :param xpaths: A single XPath as a string, a dictionary, a list, or a tuple of XPaths.
+        :param response: Optional, the response object from which to extract data. Uses the last response if not provided.
+        :return: Depending on xpaths input, returns a single data value, a dictionary with lists of results,
+                 or a list of dictionaries for key-value paired data.
         """
         if response is None:
             if self.last_response is None:
@@ -73,38 +76,45 @@ class WebConnector:
             response = self.last_response
 
         soup = fromstring(response.text)
-
-        def extract_single_xpath(xpath):
-            result = soup.xpath(xpath)
-
-            # return result[0] if result else None
-            try:
-                return result[0]
-            except IndexError:
-                return None
+        print(response.text)
+        def extract(xpath):
+            aux = soup.xpath(xpath)
+            return delimiter.join(set([elem.strip() for elem in soup.xpath(xpath) if elem.strip()]))
 
         if isinstance(xpaths, str):
-            return extract_single_xpath(xpaths)
+            return extract(xpaths)
 
         elif isinstance(xpaths, (dict, list, tuple)):
             results = {}
-            # Create an iterable to unify handling of dict and list/tuple
-            
-            # iterable = xpaths.items() if isinstance(xpaths, dict) else enumerate(xpaths)
-            try:
-                items = xpaths.items()
-            except AttributeError:
-                items = enumerate(xpaths)
-
-            for key, xpath in items:
-                results[key] = extract_single_xpath(xpath)
+            for key, xpath in (xpaths.items() if isinstance(xpaths, dict) else enumerate(xpaths)):
+                extracted = extract(xpath)
+                # If multiple values are found for a single XPath, return them all
+                results[key] = extracted if len(extracted) > 1 else (extracted[0] if extracted else None)
 
             return results
 
         else:
-            raise ValueError(
-                "xpaths must be a string, a dictionary, a list, or a tuple."
-            )
+            raise ValueError("xpaths must be a string, a dictionary, a list, or a tuple.")
+
+    def extract_key_value_data(self, key_xpath: str, value_xpath: str, response: Optional[Response] = None) -> List[Dict[str, str]]:
+        """
+        Extracts key-value paired data from a page, useful for extracting data from tables or structured formats.
+
+        :param key_xpath: The XPath to extract keys.
+        :param value_xpath: The XPath to extract corresponding values.
+        :param response: Optional, the response object from which to extract data. Uses the last response if not provided.
+        :return: A list of dictionaries, each representing a key-value pair.
+        """
+        if response is None:
+            if self.last_response is None:
+                raise ValueError("No response is available for extraction.")
+            response = self.last_response
+
+        soup = fromstring(response.text)
+        keys = soup.xpath(key_xpath)
+        values = soup.xpath(value_xpath)
+
+        return [{key.strip(): value.strip()} for key, value in zip(keys, values) if key.strip() and value.strip()]
 
     def set_headers(self, headers: Dict[str, str]):
         """
@@ -129,3 +139,21 @@ class WebConnector:
         url = f"{self.base_url}{url}"
         self.last_response = self._session.request(method, url, **kwargs)
         return self.last_response
+
+
+
+# Example usage
+# if __name__ == "__main__":
+#     connector = WebConnector("https://example.com")
+#     connector.make_request("GET", "/products")
+#     xpaths = {
+#         "product_names": "//div[@class='product']/name/text()",
+#         "product_prices": "//div[@class='product']/price/text()"
+#     }
+#     products_data = connector.extract_data_from_response(xpaths)
+#     print(json.dumps(products_data, indent=4))
+    
+#     # Extracting key-value pair data
+#     table_data = connector.extract_key_value_data("//table[@id='product-details']")
+#     print(json.dumps(table_data, indent=4))
+
